@@ -1,10 +1,12 @@
-name: Extraer Precio GLP Facilito (Diario)
+name: Extraer Precio GLP Facilito
 
 on:
   schedule:
-    # 07:00 hora Lima = 12:00 UTC (Perú es UTC-5, sin DST)
     - cron: '0 12 * * *'
-  workflow_dispatch:  # permite ejecutarlo manualmente desde GitHub
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   scrape:
@@ -12,34 +14,39 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout código
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Instalar dependencias
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Instalar Chromium para Playwright
+      - name: Install Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Ejecutar scraper
-        env:
-          AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          SP_SITE_HOST:        ${{ secrets.SP_SITE_HOST }}
-          SP_SITE_PATH:        ${{ secrets.SP_SITE_PATH }}
-          SP_FILE_PATH:        ${{ secrets.SP_FILE_PATH }}
+      - name: Run scraper
         run: python scrape_facilito.py
 
-      - name: Subir screenshot de error (si falla)
+      - name: Commit and push CSV
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add precios.csv
+          if git diff --staged --quiet; then
+            echo "No hay cambios para commit"
+          else
+            git commit -m "Update precios $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
+
+      - name: Upload error screenshot
         if: failure()
         uses: actions/upload-artifact@v4
         with:
