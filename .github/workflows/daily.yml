@@ -46,11 +46,13 @@ jobs:
             git push
           fi
 
-      - name: Upload error screenshot
-        if: failure()
+      - name: Upload debug files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot
-          path: error_debug.png
+          name: debug-files
+          path: |
+            error_debug.png
+            page_debug.html
           if-no-files-found: ignore
           retention-days: 14
