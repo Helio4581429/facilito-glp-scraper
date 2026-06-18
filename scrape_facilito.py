@@ -175,6 +175,13 @@ def scrape_lurin_todos_establecimientos() -> list[dict]:
                 log.info(f"  -> {len(filas_producto)} establecimientos para {prod['nombre']}")
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
+            if not todas_filas:
+                log.warning("0 filas: guardando captura y HTML para diagnostico")
+                try:
+                    page.screenshot(path="error_debug.png", full_page=True)
+                    Path("page_debug.html").write_text(page.content(), encoding="utf-8")
+                except Exception as e:
+                    log.error(f"No se pudo guardar diagnostico: {e}")
             return todas_filas
 
         except PWTimeout as e:
