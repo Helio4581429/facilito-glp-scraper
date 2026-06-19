@@ -1,15 +1,13 @@
 """
 Extractor diario de precios GLP envasado de Facilito (Osinergmin).
-Alcance: TODOS los establecimientos en LURIN para balones de 15 Kg y 45 Kg.
+Alcance: TODOS los distritos de la provincia de LIMA, para balones de 15 Kg y 45 Kg.
 
 Bypass reCAPTCHA: renderiza con Playwright (Chromium real). reCAPTCHA v3
 emite el token automaticamente al cargar la pagina.
 
 Salida: append a precios.csv en el mismo repo.
-Power BI lee el CSV desde la URL publica de GitHub.
 """
 
-import os
 import sys
 import csv
 import logging
@@ -17,7 +15,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
 # -----------------------------------------------------------------------------
 # Configuracion
@@ -34,10 +32,9 @@ FACILITO_URL = (
     "buscadorEnvasadoGLP.jsp?tipoEnvasado=PE"
 )
 
-# Codigos capturados del DOM real
+# Codigos geograficos
 COD_DEPARTAMENTO = "150000"  # LIMA
-COD_PROVINCIA    = "150100"  # LIMA
-COD_DISTRITO     = "150119"  # LURIN
+COD_PROVINCIA    = "150100"  # LIMA (provincia)
 
 # Productos a iterar
 PRODUCTOS = [
@@ -45,10 +42,11 @@ PRODUCTOS = [
     {"codigo": "54", "nombre": "45 Kg"},
 ]
 
-# Ruta del CSV de salida (relativa al repo)
-CSV_PATH = Path("precios.csv")
+# Archivos de salida / diagnostico
+CSV_PATH   = Path("precios.csv")
+DEBUG_PNG  = "error_debug.png"
+DEBUG_HTML = "page_debug.html"
 
-# Cabeceras del CSV
 CSV_HEADERS = [
     "fecha_extraccion",
     "hora_extraccion",
@@ -63,10 +61,39 @@ CSV_HEADERS = [
 ]
 
 
+def _guardar_diagnostico(page):
+    """Guarda captura y HTML para inspeccionar que mostro la pagina."""
+    try:
+        page.screenshot(path=DEBUG_PNG, full_page=True)
+        Path(DEBUG_HTML).write_text(page.content(), encoding="utf-8")
+        log.info("Diagnostico guardado (captura + HTML)")
+    except Exception as e:
+        log.error(f"No se pudo guardar diagnostico: {e}")
+
+
+def _leer_distritos(page) -> list[dict]:
+    """Lee del menu desplegable TODOS los distritos de la provincia."""
+    return page.evaluate("""
+        () => {
+            const sel = document.querySelector('select[name="distrito"]');
+            if (!sel) return [];
+            const out = [];
+            for (const opt of sel.options) {
+                const v = (opt.value || '').trim();
+                const t = (opt.text || '').trim();
+                if (/^\\d{6}$/.test(v) && v !== '150000' && v !== '150100') {
+                    out.push({codigo: v, nombre: t});
+                }
+            }
+            return out;
+        }
+    """)
+
+
 # -----------------------------------------------------------------------------
 # 1. Scraping
 # -----------------------------------------------------------------------------
-def scrape_lurin_todos_establecimientos() -> list[dict]:
+def scrape_lima_envasado() -> list[dict]:
     todas_filas: list[dict] = []
     now_lima = datetime.now(ZoneInfo("America/Lima"))
     fecha_str = now_lima.strftime("%Y-%m-%d")
@@ -109,88 +136,88 @@ def scrape_lurin_todos_establecimientos() -> list[dict]:
             page.wait_for_load_state("networkidle", timeout=60000)
             page.wait_for_timeout(2000)
 
-            log.info(f"Distrito LURIN ({COD_DISTRITO})...")
-            page.evaluate(f"""
-                document.querySelector('select[name="distrito"]').value = '{COD_DISTRITO}';
-                cambiarDistrito();
-            """)
-            page.wait_for_load_state("networkidle", timeout=60000)
-            page.wait_for_timeout(2000)
+            distritos = _leer_distritos(page)
+            log.info(f"Distritos encontrados: {len(distritos)}")
+            if not distritos:
+                log.warning("No se pudo leer la lista de distritos")
+                _guardar_diagnostico(page)
+                return []
 
-            for prod in PRODUCTOS:
-                log.info(f"Producto {prod['nombre']} ({prod['codigo']})...")
+            for dist in distritos:
+                log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
                 page.evaluate(f"""
-                    document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
-                    cambiarProducto();
+                    document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                    cambiarDistrito();
                 """)
                 page.wait_for_load_state("networkidle", timeout=60000)
                 page.wait_for_timeout(2000)
 
-                filas_producto = page.evaluate("""
-                    () => {
-                        const out = [];
-                        const rows = document.querySelectorAll('#tblPreciosAGranelGlp tbody tr');
-                        for (const r of rows) {
-                            const th = r.querySelector('th');
-                            const cells = r.querySelectorAll('td');
-                            if (th && cells.length >= 5) {
-                                out.push({
-                                    distrito:        th.innerText.trim(),
-                                    marca:           cells[0].innerText.trim(),
-                                    establecimiento: cells[1].innerText.trim(),
-                                    direccion:       cells[2].innerText.trim(),
-                                    telefono:        cells[3].innerText.trim(),
-                                    precio:          cells[4].innerText.trim()
-                                });
+                for prod in PRODUCTOS:
+                    page.evaluate(f"""
+                        document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
+                        cambiarProducto();
+                    """)
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                    page.wait_for_timeout(1800)
+
+                    filas_producto = page.evaluate("""
+                        () => {
+                            const out = [];
+                            const rows = document.querySelectorAll('#tblPreciosAGranelGlp tbody tr');
+                            for (const r of rows) {
+                                const th = r.querySelector('th');
+                                const cells = r.querySelectorAll('td');
+                                if (th && cells.length >= 5) {
+                                    out.push({
+                                        distrito:        th.innerText.trim(),
+                                        marca:           cells[0].innerText.trim(),
+                                        establecimiento: cells[1].innerText.trim(),
+                                        direccion:       cells[2].innerText.trim(),
+                                        telefono:        cells[3].innerText.trim(),
+                                        precio:          cells[4].innerText.trim()
+                                    });
+                                }
                             }
+                            return out;
                         }
-                        return out;
-                    }
-                """)
+                    """)
 
-                if not filas_producto:
-                    log.warning(f"No se encontraron filas para {prod['nombre']} en LURIN")
-                    continue
-
-                for f in filas_producto:
-                    precio_clean = f["precio"].replace(",", "").strip()
-                    try:
-                        precio_num = float(precio_clean)
-                    except ValueError:
-                        log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                    if not filas_producto:
                         continue
 
-                    todas_filas.append({
-                        "fecha_extraccion": fecha_str,
-                        "hora_extraccion":  hora_str,
-                        "distrito":         f["distrito"],
-                        "marca":            f["marca"],
-                        "establecimiento":  f["establecimiento"],
-                        "direccion":        f["direccion"],
-                        "telefono":         f["telefono"],
-                        "precio":           precio_num,
-                        "producto":         prod["nombre"],
-                        "fuente":           "Facilito Osinergmin",
-                    })
+                    for f in filas_producto:
+                        precio_clean = f["precio"].replace(",", "").strip()
+                        try:
+                            precio_num = float(precio_clean)
+                        except ValueError:
+                            log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                            continue
 
-                log.info(f"  -> {len(filas_producto)} establecimientos para {prod['nombre']}")
+                        todas_filas.append({
+                            "fecha_extraccion": fecha_str,
+                            "hora_extraccion":  hora_str,
+                            "distrito":         f["distrito"],
+                            "marca":            f["marca"],
+                            "establecimiento":  f["establecimiento"],
+                            "direccion":        f["direccion"],
+                            "telefono":         f["telefono"],
+                            "precio":           precio_num,
+                            "producto":         prod["nombre"],
+                            "fuente":           "Facilito Osinergmin",
+                        })
+
+                    log.info(f"  {dist['nombre']} / {prod['nombre']}: {len(filas_producto)} establecimientos")
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
                 log.warning("0 filas: guardando captura y HTML para diagnostico")
-                try:
-                    page.screenshot(path="error_debug.png", full_page=True)
-                    Path("page_debug.html").write_text(page.content(), encoding="utf-8")
-                except Exception as e:
-                    log.error(f"No se pudo guardar diagnostico: {e}")
+                _guardar_diagnostico(page)
+
             return todas_filas
 
-        except PWTimeout as e:
-            log.error(f"Timeout durante scraping: {e}")
-            try:
-                page.screenshot(path="error_debug.png", full_page=True)
-            except Exception:
-                pass
+        except Exception as e:
+            log.error(f"Error durante scraping: {e}")
+            _guardar_diagnostico(page)
             raise
         finally:
             context.close()
@@ -205,16 +232,12 @@ def append_to_csv(filas: list[dict]):
         log.warning("Sin filas para agregar - skip CSV")
         return
 
-    file_exists = CSV_PATH.exists()
-
-    # Si no existe, crear con headers
-    if not file_exists:
+    if not CSV_PATH.exists():
         log.info(f"Creando archivo nuevo: {CSV_PATH}")
         with CSV_PATH.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
             writer.writeheader()
 
-    # Append filas
     with CSV_PATH.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
         for row in filas:
@@ -228,16 +251,15 @@ def append_to_csv(filas: list[dict]):
 # -----------------------------------------------------------------------------
 def main():
     try:
-        filas = scrape_lurin_todos_establecimientos()
+        filas = scrape_lima_envasado()
         if not filas:
             log.error("Cero filas extraidas - abortando sin escribir")
             sys.exit(1)
 
         append_to_csv(filas)
 
-        n_costa = sum(1 for f in filas if "COSTA" in f["marca"].upper()
-                      or "COSTA" in f["establecimiento"].upper())
-        log.info(f"OK - {len(filas)} filas, {n_costa} de Costa Gas")
+        distritos_con_data = len({f["distrito"] for f in filas})
+        log.info(f"OK - {len(filas)} filas en {distritos_con_data} distritos")
 
     except Exception as e:
         log.error(f"Ejecucion fallo: {e}", exc_info=True)
