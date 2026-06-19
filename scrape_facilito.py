@@ -129,17 +129,18 @@ def scrape_lurin_todos_establecimientos() -> list[dict]:
                 filas_producto = page.evaluate("""
                     () => {
                         const out = [];
-                        const rows = document.querySelectorAll('table tbody tr');
+                        const rows = document.querySelectorAll('#tblPreciosAGranelGlp tbody tr');
                         for (const r of rows) {
+                            const th = r.querySelector('th');
                             const cells = r.querySelectorAll('td');
-                            if (cells.length >= 6) {
+                            if (th && cells.length >= 5) {
                                 out.push({
-                                    distrito:        cells[0].innerText.trim(),
-                                    marca:           cells[1].innerText.trim(),
-                                    establecimiento: cells[2].innerText.trim(),
-                                    direccion:       cells[3].innerText.trim(),
-                                    telefono:        cells[4].innerText.trim(),
-                                    precio:          cells[5].innerText.trim()
+                                    distrito:        th.innerText.trim(),
+                                    marca:           cells[0].innerText.trim(),
+                                    establecimiento: cells[1].innerText.trim(),
+                                    direccion:       cells[2].innerText.trim(),
+                                    telefono:        cells[3].innerText.trim(),
+                                    precio:          cells[4].innerText.trim()
                                 });
                             }
                         }
