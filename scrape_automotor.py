@@ -2,8 +2,10 @@
 Extractor diario de precios GLP Automotor (a granel) de Facilito (Osinergmin).
 Alcance: TODOS los distritos de la provincia de LIMA, GLP - Granel.
 
-Estrategia robusta: recarga la pagina desde cero para CADA distrito, evitando
-que el estado acumulado de la pagina rompa el formulario a mitad del recorrido.
+Clave: makeAction() y los cambios de seleccion ENVIAN el formulario, que requiere
+un token reCAPTCHA generado de forma asincrona. Por eso, antes de cada envio se
+ESPERA a que el token exista. Ademas se recarga la pagina por cada distrito para
+evitar el estado acumulado que rompia el formulario.
 
 Salida: append a precios_automotor.csv en el mismo repo.
 """
@@ -50,17 +52,49 @@ def _guardar_diagnostico(page):
         log.error(f"No se pudo guardar diagnostico: {e}")
 
 
+def _esperar_token(page, timeout=20000):
+    """Espera a que el token reCAPTCHA este generado, si existe el campo."""
+    try:
+        tiene = page.evaluate("() => !!document.getElementById('g-recaptcha-response')")
+    except Exception:
+        tiene = False
+    if not tiene:
+        return
+    try:
+        page.wait_for_function(
+            "() => { const e = document.getElementById('g-recaptcha-response');"
+            " return e && e.value && e.value.length > 0; }",
+            timeout=timeout,
+        )
+    except Exception:
+        log.warning("Token reCAPTCHA no listo a tiempo, continuando")
+
+
 def _seleccionar_lima(page):
+    """Pagina fresca -> Departamento y Provincia LIMA (con espera de token)."""
     page.goto(FACILITO_URL, wait_until="networkidle", timeout=60000)
-    page.evaluate(f"makeAction({COD_DEPARTAMENTO})")
-    page.wait_for_load_state("networkidle", timeout=60000)
-    page.wait_for_timeout(2500)
+    page.wait_for_function("() => typeof makeAction === 'function'", timeout=30000)
+
+    ok = False
+    for _ in range(3):
+        _esperar_token(page)
+        page.evaluate(f"makeAction({COD_DEPARTAMENTO})")
+        try:
+            page.wait_for_selector('select[name="provincia"]', timeout=20000)
+            ok = True
+            break
+        except Exception:
+            page.wait_for_timeout(2000)
+    if not ok:
+        raise RuntimeError("No cargo el formulario tras seleccionar departamento")
+
+    _esperar_token(page)
     page.evaluate(f"""
         document.querySelector('select[name="provincia"]').value = '{COD_PROVINCIA}';
         cambiarProvincia();
     """)
-    page.wait_for_load_state("networkidle", timeout=60000)
-    page.wait_for_timeout(1500)
+    page.wait_for_selector('select[name="distrito"]', timeout=20000)
+    page.wait_for_timeout(800)
 
 
 def _leer_distritos(page) -> list[dict]:
@@ -86,19 +120,14 @@ def _seleccionar_granel(page):
         () => {
             const sel = document.querySelector('select[name="producto"]');
             if (!sel) return 'sin-select-producto';
-            let encontrado = false;
             for (const opt of sel.options) {
                 if ((opt.text || '').toUpperCase().includes('GRANEL')) {
                     sel.value = opt.value;
-                    encontrado = true;
                     break;
                 }
             }
-            if (typeof cambiarProducto === 'function') {
-                cambiarProducto();
-                return encontrado ? 'ok' : 'granel-no-encontrado';
-            }
-            return 'sin-funcion-cambiarProducto';
+            if (typeof cambiarProducto === 'function') { cambiarProducto(); return 'ok'; }
+            return 'sin-funcion';
         }
     """)
 
@@ -163,13 +192,16 @@ def scrape_lima_automotor() -> list[dict]:
                 log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
                 try:
                     _seleccionar_lima(page)
+
+                    _esperar_token(page)
                     page.evaluate(f"""
                         document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
                         cambiarDistrito();
                     """)
-                    page.wait_for_load_state("networkidle", timeout=60000)
-                    page.wait_for_timeout(1500)
+                    page.wait_for_selector('select[name="producto"]', timeout=20000)
+                    page.wait_for_timeout(800)
 
+                    _esperar_token(page)
                     _seleccionar_granel(page)
                     page.wait_for_load_state("networkidle", timeout=60000)
                     page.wait_for_timeout(1500)
