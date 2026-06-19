@@ -157,64 +157,71 @@ def scrape_lima_automotor() -> list[dict]:
 
             for dist in distritos:
                 log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
-                page.evaluate(f"""
-                    document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
-                    cambiarDistrito();
-                """)
-                page.wait_for_load_state("networkidle", timeout=60000)
-                page.wait_for_timeout(2000)
+                try:
+                    page.wait_for_selector('select[name="distrito"]', timeout=30000)
+                    page.evaluate(f"""
+                        document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                        cambiarDistrito();
+                    """)
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                    page.wait_for_timeout(2000)
 
-                _seleccionar_granel(page)
-                page.wait_for_load_state("networkidle", timeout=60000)
-                page.wait_for_timeout(1800)
+                    page.wait_for_selector('select[name="producto"]', timeout=30000)
+                    _seleccionar_granel(page)
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                    page.wait_for_timeout(1800)
 
-                filas = page.evaluate("""
-                    () => {
-                        const out = [];
-                        const rows = document.querySelectorAll('table tbody tr');
-                        for (const r of rows) {
-                            const th = r.querySelector('th');
-                            const cells = r.querySelectorAll('td');
-                            if (th && cells.length >= 5) {
-                                out.push({
-                                    distrito:        th.innerText.trim(),
-                                    establecimiento: cells[0].innerText.trim(),
-                                    direccion:       cells[1].innerText.trim(),
-                                    telefono:        cells[2].innerText.trim(),
-                                    precio:          cells[3].innerText.trim(),
-                                    unidad_medida:   cells[4].innerText.trim()
-                                });
+                    filas = page.evaluate("""
+                        () => {
+                            const out = [];
+                            const rows = document.querySelectorAll('table tbody tr');
+                            for (const r of rows) {
+                                const th = r.querySelector('th');
+                                const cells = r.querySelectorAll('td');
+                                if (th && cells.length >= 5) {
+                                    out.push({
+                                        distrito:        th.innerText.trim(),
+                                        establecimiento: cells[0].innerText.trim(),
+                                        direccion:       cells[1].innerText.trim(),
+                                        telefono:        cells[2].innerText.trim(),
+                                        precio:          cells[3].innerText.trim(),
+                                        unidad_medida:   cells[4].innerText.trim()
+                                    });
+                                }
                             }
+                            return out;
                         }
-                        return out;
-                    }
-                """)
+                    """)
 
-                if not filas:
-                    continue
-
-                for f in filas:
-                    precio_clean = f["precio"].replace(",", "").strip()
-                    try:
-                        precio_num = float(precio_clean)
-                    except ValueError:
-                        log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                    if not filas:
                         continue
 
-                    todas_filas.append({
-                        "fecha_extraccion": fecha_str,
-                        "hora_extraccion":  hora_str,
-                        "distrito":         f["distrito"],
-                        "establecimiento":  f["establecimiento"],
-                        "direccion":        f["direccion"],
-                        "telefono":         f["telefono"],
-                        "precio":           precio_num,
-                        "unidad_medida":    f["unidad_medida"],
-                        "producto":         "GLP - Granel",
-                        "fuente":           "Facilito Osinergmin",
-                    })
+                    for f in filas:
+                        precio_clean = f["precio"].replace(",", "").strip()
+                        try:
+                            precio_num = float(precio_clean)
+                        except ValueError:
+                            log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                            continue
 
-                log.info(f"  {dist['nombre']}: {len(filas)} gasocentros")
+                        todas_filas.append({
+                            "fecha_extraccion": fecha_str,
+                            "hora_extraccion":  hora_str,
+                            "distrito":         f["distrito"],
+                            "establecimiento":  f["establecimiento"],
+                            "direccion":        f["direccion"],
+                            "telefono":         f["telefono"],
+                            "precio":           precio_num,
+                            "unidad_medida":    f["unidad_medida"],
+                            "producto":         "GLP - Granel",
+                            "fuente":           "Facilito Osinergmin",
+                        })
+
+                    log.info(f"  {dist['nombre']}: {len(filas)} gasocentros")
+
+                except Exception as e:
+                    log.warning(f"Distrito {dist['nombre']} fallo, se omite: {e}")
+                    continue
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
