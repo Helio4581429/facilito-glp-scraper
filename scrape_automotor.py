@@ -1,6 +1,6 @@
 """
 Extractor diario de precios GLP Automotor (a granel) de Facilito (Osinergmin).
-Alcance: TODOS los gasocentros en LURIN que venden GLP - Granel.
+Alcance: TODOS los distritos de la provincia de LIMA, GLP - Granel.
 
 Bypass reCAPTCHA: renderiza con Playwright (Chromium real). reCAPTCHA v3
 emite el token automaticamente al cargar la pagina.
@@ -15,7 +15,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
 # -----------------------------------------------------------------------------
 # Configuracion
@@ -31,15 +31,12 @@ FACILITO_URL = (
     "https://www.facilito.gob.pe/facilito/pages/facilito/buscadorAGranelGLP.jsp"
 )
 
-# Codigos geograficos (mismos que el scraper de envasado)
 COD_DEPARTAMENTO = "150000"  # LIMA
-COD_PROVINCIA    = "150100"  # LIMA
-COD_DISTRITO     = "150119"  # LURIN
+COD_PROVINCIA    = "150100"  # LIMA (provincia)
 
-# Archivos de salida / diagnostico
-CSV_PATH        = Path("precios_automotor.csv")
-DEBUG_PNG       = "error_debug_automotor.png"
-DEBUG_HTML      = "page_debug_automotor.html"
+CSV_PATH   = Path("precios_automotor.csv")
+DEBUG_PNG  = "error_debug_automotor.png"
+DEBUG_HTML = "page_debug_automotor.html"
 
 CSV_HEADERS = [
     "fecha_extraccion",
@@ -56,7 +53,6 @@ CSV_HEADERS = [
 
 
 def _guardar_diagnostico(page):
-    """Guarda captura y HTML para inspeccionar que mostro la pagina."""
     try:
         page.screenshot(path=DEBUG_PNG, full_page=True)
         Path(DEBUG_HTML).write_text(page.content(), encoding="utf-8")
@@ -65,10 +61,51 @@ def _guardar_diagnostico(page):
         log.error(f"No se pudo guardar diagnostico: {e}")
 
 
+def _leer_distritos(page) -> list[dict]:
+    return page.evaluate("""
+        () => {
+            const sel = document.querySelector('select[name="distrito"]');
+            if (!sel) return [];
+            const out = [];
+            for (const opt of sel.options) {
+                const v = (opt.value || '').trim();
+                const t = (opt.text || '').trim();
+                if (/^\\d{6}$/.test(v) && v !== '150000' && v !== '150100') {
+                    out.push({codigo: v, nombre: t});
+                }
+            }
+            return out;
+        }
+    """)
+
+
+def _seleccionar_granel(page):
+    """Selecciona el producto GLP - Granel por su texto y dispara el cambio."""
+    return page.evaluate("""
+        () => {
+            const sel = document.querySelector('select[name="producto"]');
+            if (!sel) return 'sin-select-producto';
+            let encontrado = false;
+            for (const opt of sel.options) {
+                if ((opt.text || '').toUpperCase().includes('GRANEL')) {
+                    sel.value = opt.value;
+                    encontrado = true;
+                    break;
+                }
+            }
+            if (typeof cambiarProducto === 'function') {
+                cambiarProducto();
+                return encontrado ? 'ok' : 'granel-no-encontrado';
+            }
+            return 'sin-funcion-cambiarProducto';
+        }
+    """)
+
+
 # -----------------------------------------------------------------------------
 # 1. Scraping
 # -----------------------------------------------------------------------------
-def scrape_lurin_automotor() -> list[dict]:
+def scrape_lima_automotor() -> list[dict]:
     todas_filas: list[dict] = []
     now_lima = datetime.now(ZoneInfo("America/Lima"))
     fecha_str = now_lima.strftime("%Y-%m-%d")
@@ -111,82 +148,73 @@ def scrape_lurin_automotor() -> list[dict]:
             page.wait_for_load_state("networkidle", timeout=60000)
             page.wait_for_timeout(2000)
 
-            log.info(f"Distrito LURIN ({COD_DISTRITO})...")
-            page.evaluate(f"""
-                document.querySelector('select[name="distrito"]').value = '{COD_DISTRITO}';
-                cambiarDistrito();
-            """)
-            page.wait_for_load_state("networkidle", timeout=60000)
-            page.wait_for_timeout(2000)
+            distritos = _leer_distritos(page)
+            log.info(f"Distritos encontrados: {len(distritos)}")
+            if not distritos:
+                log.warning("No se pudo leer la lista de distritos")
+                _guardar_diagnostico(page)
+                return []
 
-            # Seleccionar producto "GLP - Granel" por su TEXTO (mas robusto que el value)
-            log.info("Seleccionando producto GLP - Granel...")
-            estado = page.evaluate("""
-                () => {
-                    const sel = document.querySelector('select[name="producto"]');
-                    if (!sel) return 'sin-select-producto';
-                    let encontrado = false;
-                    for (const opt of sel.options) {
-                        if ((opt.text || '').toUpperCase().includes('GRANEL')) {
-                            sel.value = opt.value;
-                            encontrado = true;
-                            break;
+            for dist in distritos:
+                log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
+                page.evaluate(f"""
+                    document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                    cambiarDistrito();
+                """)
+                page.wait_for_load_state("networkidle", timeout=60000)
+                page.wait_for_timeout(2000)
+
+                _seleccionar_granel(page)
+                page.wait_for_load_state("networkidle", timeout=60000)
+                page.wait_for_timeout(1800)
+
+                filas = page.evaluate("""
+                    () => {
+                        const out = [];
+                        const rows = document.querySelectorAll('table tbody tr');
+                        for (const r of rows) {
+                            const th = r.querySelector('th');
+                            const cells = r.querySelectorAll('td');
+                            if (th && cells.length >= 5) {
+                                out.push({
+                                    distrito:        th.innerText.trim(),
+                                    establecimiento: cells[0].innerText.trim(),
+                                    direccion:       cells[1].innerText.trim(),
+                                    telefono:        cells[2].innerText.trim(),
+                                    precio:          cells[3].innerText.trim(),
+                                    unidad_medida:   cells[4].innerText.trim()
+                                });
+                            }
                         }
+                        return out;
                     }
-                    if (typeof cambiarProducto === 'function') {
-                        cambiarProducto();
-                        return encontrado ? 'ok' : 'granel-no-encontrado';
-                    }
-                    return 'sin-funcion-cambiarProducto';
-                }
-            """)
-            log.info(f"Estado seleccion producto: {estado}")
-            page.wait_for_load_state("networkidle", timeout=60000)
-            page.wait_for_timeout(2500)
+                """)
 
-            # Leer la tabla de resultados
-            filas = page.evaluate("""
-                () => {
-                    const out = [];
-                    const rows = document.querySelectorAll('table tbody tr');
-                    for (const r of rows) {
-                        const th = r.querySelector('th');
-                        const cells = r.querySelectorAll('td');
-                        if (th && cells.length >= 5) {
-                            out.push({
-                                distrito:        th.innerText.trim(),
-                                establecimiento: cells[0].innerText.trim(),
-                                direccion:       cells[1].innerText.trim(),
-                                telefono:        cells[2].innerText.trim(),
-                                precio:          cells[3].innerText.trim(),
-                                unidad_medida:   cells[4].innerText.trim()
-                            });
-                        }
-                    }
-                    return out;
-                }
-            """)
-
-            for f in filas:
-                precio_clean = f["precio"].replace(",", "").strip()
-                try:
-                    precio_num = float(precio_clean)
-                except ValueError:
-                    log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                if not filas:
                     continue
 
-                todas_filas.append({
-                    "fecha_extraccion": fecha_str,
-                    "hora_extraccion":  hora_str,
-                    "distrito":         f["distrito"],
-                    "establecimiento":  f["establecimiento"],
-                    "direccion":        f["direccion"],
-                    "telefono":         f["telefono"],
-                    "precio":           precio_num,
-                    "unidad_medida":    f["unidad_medida"],
-                    "producto":         "GLP - Granel",
-                    "fuente":           "Facilito Osinergmin",
-                })
+                for f in filas:
+                    precio_clean = f["precio"].replace(",", "").strip()
+                    try:
+                        precio_num = float(precio_clean)
+                    except ValueError:
+                        log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                        continue
+
+                    todas_filas.append({
+                        "fecha_extraccion": fecha_str,
+                        "hora_extraccion":  hora_str,
+                        "distrito":         f["distrito"],
+                        "establecimiento":  f["establecimiento"],
+                        "direccion":        f["direccion"],
+                        "telefono":         f["telefono"],
+                        "precio":           precio_num,
+                        "unidad_medida":    f["unidad_medida"],
+                        "producto":         "GLP - Granel",
+                        "fuente":           "Facilito Osinergmin",
+                    })
+
+                log.info(f"  {dist['nombre']}: {len(filas)} gasocentros")
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
@@ -231,13 +259,15 @@ def append_to_csv(filas: list[dict]):
 # -----------------------------------------------------------------------------
 def main():
     try:
-        filas = scrape_lurin_automotor()
+        filas = scrape_lima_automotor()
         if not filas:
             log.error("Cero filas extraidas - abortando sin escribir")
             sys.exit(1)
 
         append_to_csv(filas)
-        log.info(f"OK - {len(filas)} gasocentros extraidos en LURIN")
+
+        distritos_con_data = len({f["distrito"] for f in filas})
+        log.info(f"OK - {len(filas)} gasocentros en {distritos_con_data} distritos")
 
     except Exception as e:
         log.error(f"Ejecucion fallo: {e}", exc_info=True)
