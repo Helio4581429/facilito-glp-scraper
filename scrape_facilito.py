@@ -145,68 +145,75 @@ def scrape_lima_envasado() -> list[dict]:
 
             for dist in distritos:
                 log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
-                page.evaluate(f"""
-                    document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
-                    cambiarDistrito();
-                """)
-                page.wait_for_load_state("networkidle", timeout=60000)
-                page.wait_for_timeout(2000)
-
-                for prod in PRODUCTOS:
+                try:
+                    page.wait_for_selector('select[name="distrito"]', timeout=30000)
                     page.evaluate(f"""
-                        document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
-                        cambiarProducto();
+                        document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                        cambiarDistrito();
                     """)
                     page.wait_for_load_state("networkidle", timeout=60000)
-                    page.wait_for_timeout(1800)
+                    page.wait_for_timeout(2000)
 
-                    filas_producto = page.evaluate("""
-                        () => {
-                            const out = [];
-                            const rows = document.querySelectorAll('#tblPreciosAGranelGlp tbody tr');
-                            for (const r of rows) {
-                                const th = r.querySelector('th');
-                                const cells = r.querySelectorAll('td');
-                                if (th && cells.length >= 5) {
-                                    out.push({
-                                        distrito:        th.innerText.trim(),
-                                        marca:           cells[0].innerText.trim(),
-                                        establecimiento: cells[1].innerText.trim(),
-                                        direccion:       cells[2].innerText.trim(),
-                                        telefono:        cells[3].innerText.trim(),
-                                        precio:          cells[4].innerText.trim()
-                                    });
+                    for prod in PRODUCTOS:
+                        page.wait_for_selector('select[name="producto"]', timeout=30000)
+                        page.evaluate(f"""
+                            document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
+                            cambiarProducto();
+                        """)
+                        page.wait_for_load_state("networkidle", timeout=60000)
+                        page.wait_for_timeout(1800)
+
+                        filas_producto = page.evaluate("""
+                            () => {
+                                const out = [];
+                                const rows = document.querySelectorAll('#tblPreciosAGranelGlp tbody tr');
+                                for (const r of rows) {
+                                    const th = r.querySelector('th');
+                                    const cells = r.querySelectorAll('td');
+                                    if (th && cells.length >= 5) {
+                                        out.push({
+                                            distrito:        th.innerText.trim(),
+                                            marca:           cells[0].innerText.trim(),
+                                            establecimiento: cells[1].innerText.trim(),
+                                            direccion:       cells[2].innerText.trim(),
+                                            telefono:        cells[3].innerText.trim(),
+                                            precio:          cells[4].innerText.trim()
+                                        });
+                                    }
                                 }
+                                return out;
                             }
-                            return out;
-                        }
-                    """)
+                        """)
 
-                    if not filas_producto:
-                        continue
-
-                    for f in filas_producto:
-                        precio_clean = f["precio"].replace(",", "").strip()
-                        try:
-                            precio_num = float(precio_clean)
-                        except ValueError:
-                            log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                        if not filas_producto:
                             continue
 
-                        todas_filas.append({
-                            "fecha_extraccion": fecha_str,
-                            "hora_extraccion":  hora_str,
-                            "distrito":         f["distrito"],
-                            "marca":            f["marca"],
-                            "establecimiento":  f["establecimiento"],
-                            "direccion":        f["direccion"],
-                            "telefono":         f["telefono"],
-                            "precio":           precio_num,
-                            "producto":         prod["nombre"],
-                            "fuente":           "Facilito Osinergmin",
-                        })
+                        for f in filas_producto:
+                            precio_clean = f["precio"].replace(",", "").strip()
+                            try:
+                                precio_num = float(precio_clean)
+                            except ValueError:
+                                log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                                continue
 
-                    log.info(f"  {dist['nombre']} / {prod['nombre']}: {len(filas_producto)} establecimientos")
+                            todas_filas.append({
+                                "fecha_extraccion": fecha_str,
+                                "hora_extraccion":  hora_str,
+                                "distrito":         f["distrito"],
+                                "marca":            f["marca"],
+                                "establecimiento":  f["establecimiento"],
+                                "direccion":        f["direccion"],
+                                "telefono":         f["telefono"],
+                                "precio":           precio_num,
+                                "producto":         prod["nombre"],
+                                "fuente":           "Facilito Osinergmin",
+                            })
+
+                        log.info(f"  {dist['nombre']} / {prod['nombre']}: {len(filas_producto)} establecimientos")
+
+                except Exception as e:
+                    log.warning(f"Distrito {dist['nombre']} fallo, se omite: {e}")
+                    continue
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
