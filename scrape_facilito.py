@@ -77,7 +77,7 @@ def _esperar_token(page, timeout=20000):
 
 def _seleccionar_lima(page):
     """Pagina fresca -> Departamento y Provincia LIMA (con espera de token)."""
-    page.goto(FACILITO_URL, wait_until="networkidle", timeout=60000)
+    page.goto(FACILITO_URL, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_function("() => typeof makeAction === 'function'", timeout=30000)
 
     ok = False
@@ -195,7 +195,7 @@ def scrape_lima_envasado() -> list[dict]:
                             document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
                             cambiarProducto();
                         """)
-                        page.wait_for_load_state("networkidle", timeout=60000)
+                        page.wait_for_load_state("load", timeout=30000)
                         page.wait_for_timeout(1500)
 
                         filas_producto = _leer_tabla(page)
