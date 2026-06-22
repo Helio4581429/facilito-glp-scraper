@@ -178,55 +178,61 @@ def scrape_lima_envasado() -> list[dict]:
 
             for dist in distritos:
                 log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
-                try:
-                    _seleccionar_lima(page)
+                filas_dist = None  # None = fallo; [] = sin datos pero ok
+                for intento in range(1, 4):  # hasta 3 intentos por distrito
+                    try:
+                        _seleccionar_lima(page)
 
-                    _esperar_token(page)
-                    page.evaluate(f"""
-                        document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
-                        cambiarDistrito();
-                    """)
-                    page.wait_for_selector('select[name="producto"]', timeout=20000)
-                    page.wait_for_timeout(800)
-
-                    for prod in PRODUCTOS:
                         _esperar_token(page)
                         page.evaluate(f"""
-                            document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
-                            cambiarProducto();
+                            document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                            cambiarDistrito();
                         """)
-                        page.wait_for_load_state("load", timeout=30000)
-                        page.wait_for_timeout(1500)
+                        page.wait_for_selector('select[name="producto"]', timeout=20000)
+                        page.wait_for_timeout(800)
 
-                        filas_producto = _leer_tabla(page)
-                        if not filas_producto:
-                            continue
+                        acum = []
+                        for prod in PRODUCTOS:
+                            _esperar_token(page)
+                            page.evaluate(f"""
+                                document.querySelector('select[name="producto"]').value = '{prod['codigo']}';
+                                cambiarProducto();
+                            """)
+                            page.wait_for_load_state("load", timeout=30000)
+                            page.wait_for_timeout(1500)
 
-                        for f in filas_producto:
-                            precio_clean = f["precio"].replace(",", "").strip()
-                            try:
-                                precio_num = float(precio_clean)
-                            except ValueError:
-                                log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
-                                continue
-                            todas_filas.append({
-                                "fecha_extraccion": fecha_str,
-                                "hora_extraccion":  hora_str,
-                                "distrito":         f["distrito"],
-                                "marca":            f["marca"],
-                                "establecimiento":  f["establecimiento"],
-                                "direccion":        f["direccion"],
-                                "telefono":         f["telefono"],
-                                "precio":           precio_num,
-                                "producto":         prod["nombre"],
-                                "fuente":           "Facilito Osinergmin",
-                            })
+                            for f in _leer_tabla(page):
+                                precio_clean = f["precio"].replace(",", "").strip()
+                                try:
+                                    precio_num = float(precio_clean)
+                                except ValueError:
+                                    log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                                    continue
+                                acum.append({
+                                    "fecha_extraccion": fecha_str,
+                                    "hora_extraccion":  hora_str,
+                                    "distrito":         f["distrito"],
+                                    "marca":            f["marca"],
+                                    "establecimiento":  f["establecimiento"],
+                                    "direccion":        f["direccion"],
+                                    "telefono":         f["telefono"],
+                                    "precio":           precio_num,
+                                    "producto":         prod["nombre"],
+                                    "fuente":           "Facilito Osinergmin",
+                                })
+                        filas_dist = acum
+                        break
 
-                        log.info(f"  {dist['nombre']} / {prod['nombre']}: {len(filas_producto)} establecimientos")
+                    except Exception as e:
+                        log.warning(f"Distrito {dist['nombre']} intento {intento}/3 fallo: {e}")
+                        page.wait_for_timeout(2000)
 
-                except Exception as e:
-                    log.warning(f"Distrito {dist['nombre']} fallo, se omite: {e}")
+                if filas_dist is None:
+                    log.warning(f"Distrito {dist['nombre']} omitido tras 3 intentos")
                     continue
+
+                todas_filas.extend(filas_dist)
+                log.info(f"  {dist['nombre']}: {len(filas_dist)} filas (15/45 Kg)")
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
