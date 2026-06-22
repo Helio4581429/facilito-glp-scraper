@@ -190,51 +190,57 @@ def scrape_lima_automotor() -> list[dict]:
 
             for dist in distritos:
                 log.info(f"--- Distrito {dist['nombre']} ({dist['codigo']}) ---")
-                try:
-                    _seleccionar_lima(page)
+                filas_dist = None  # None = fallo; [] = sin datos pero ok
+                for intento in range(1, 4):  # hasta 3 intentos por distrito
+                    try:
+                        _seleccionar_lima(page)
 
-                    _esperar_token(page)
-                    page.evaluate(f"""
-                        document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
-                        cambiarDistrito();
-                    """)
-                    page.wait_for_selector('select[name="producto"]', timeout=20000)
-                    page.wait_for_timeout(800)
+                        _esperar_token(page)
+                        page.evaluate(f"""
+                            document.querySelector('select[name="distrito"]').value = '{dist['codigo']}';
+                            cambiarDistrito();
+                        """)
+                        page.wait_for_selector('select[name="producto"]', timeout=20000)
+                        page.wait_for_timeout(800)
 
-                    _esperar_token(page)
-                    _seleccionar_granel(page)
-                    page.wait_for_load_state("load", timeout=30000)
-                    page.wait_for_timeout(1500)
+                        _esperar_token(page)
+                        _seleccionar_granel(page)
+                        page.wait_for_load_state("load", timeout=30000)
+                        page.wait_for_timeout(1500)
 
-                    filas = _leer_tabla(page)
-                    if not filas:
-                        continue
+                        acum = []
+                        for f in _leer_tabla(page):
+                            precio_clean = f["precio"].replace(",", "").strip()
+                            try:
+                                precio_num = float(precio_clean)
+                            except ValueError:
+                                log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
+                                continue
+                            acum.append({
+                                "fecha_extraccion": fecha_str,
+                                "hora_extraccion":  hora_str,
+                                "distrito":         f["distrito"],
+                                "establecimiento":  f["establecimiento"],
+                                "direccion":        f["direccion"],
+                                "telefono":         f["telefono"],
+                                "precio":           precio_num,
+                                "unidad_medida":    f["unidad_medida"],
+                                "producto":         "GLP - Granel",
+                                "fuente":           "Facilito Osinergmin",
+                            })
+                        filas_dist = acum
+                        break
 
-                    for f in filas:
-                        precio_clean = f["precio"].replace(",", "").strip()
-                        try:
-                            precio_num = float(precio_clean)
-                        except ValueError:
-                            log.warning(f"Precio no parseable: '{f['precio']}' - omitido")
-                            continue
-                        todas_filas.append({
-                            "fecha_extraccion": fecha_str,
-                            "hora_extraccion":  hora_str,
-                            "distrito":         f["distrito"],
-                            "establecimiento":  f["establecimiento"],
-                            "direccion":        f["direccion"],
-                            "telefono":         f["telefono"],
-                            "precio":           precio_num,
-                            "unidad_medida":    f["unidad_medida"],
-                            "producto":         "GLP - Granel",
-                            "fuente":           "Facilito Osinergmin",
-                        })
+                    except Exception as e:
+                        log.warning(f"Distrito {dist['nombre']} intento {intento}/3 fallo: {e}")
+                        page.wait_for_timeout(2000)
 
-                    log.info(f"  {dist['nombre']}: {len(filas)} gasocentros")
-
-                except Exception as e:
-                    log.warning(f"Distrito {dist['nombre']} fallo, se omite: {e}")
+                if filas_dist is None:
+                    log.warning(f"Distrito {dist['nombre']} omitido tras 3 intentos")
                     continue
+
+                todas_filas.extend(filas_dist)
+                log.info(f"  {dist['nombre']}: {len(filas_dist)} gasocentros")
 
             log.info(f"Total filas extraidas: {len(todas_filas)}")
             if not todas_filas:
