@@ -43,7 +43,11 @@ jobs:
             echo "No hay cambios para commit"
           else
             git commit -m "Update precios automotor $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break
+              echo "Push intento $i fallo, reintentando..."
+              sleep 5
+            done
           fi
 
       - name: Upload debug files
