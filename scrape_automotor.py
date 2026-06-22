@@ -72,7 +72,7 @@ def _esperar_token(page, timeout=20000):
 
 def _seleccionar_lima(page):
     """Pagina fresca -> Departamento y Provincia LIMA (con espera de token)."""
-    page.goto(FACILITO_URL, wait_until="networkidle", timeout=60000)
+    page.goto(FACILITO_URL, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_function("() => typeof makeAction === 'function'", timeout=30000)
 
     ok = False
@@ -203,7 +203,7 @@ def scrape_lima_automotor() -> list[dict]:
 
                     _esperar_token(page)
                     _seleccionar_granel(page)
-                    page.wait_for_load_state("networkidle", timeout=60000)
+                    page.wait_for_load_state("load", timeout=30000)
                     page.wait_for_timeout(1500)
 
                     filas = _leer_tabla(page)
