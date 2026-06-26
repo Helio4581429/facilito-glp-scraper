@@ -8,15 +8,15 @@ on:
 permissions:
   contents: write
 
-# Evita que 2 runs del mismo workflow se ejecuten al mismo tiempo y choquen al hacer push
+# Grupo COMPARTIDO con automotor.yml: nunca corren a la vez -> no chocan al hacer push
 concurrency:
-  group: scrape-${{ github.workflow }}
+  group: glp-scraper-commit
   cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -45,54 +45,29 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add precios_automotor.csv
-          if git diff --staged --quiet; then
-            echo "No hay cambios para commit"
-          else
-            git commit -m "Update precios automotor $(date -u +'%Y-%m-%d %H:%M UTC')"
-            for i in 1 2 3 4 5; do
-              git pull --rebase origin main && git push && break
-              echo "Push intento $i fallo, reintentando..."
-              sleep 5
-            done
+          git add precios.csv
+          if git diff --cached --quiet; then
+            echo "Sin cambios en precios.csv, nada que commitear"
+            exit 0
           fi
-
-          git commit -m "Update precios $(date -u +'%Y-%m-%d %H:%M UTC')"
-
-          # Reintenta hasta 5 veces con backoff exponencial si hay race condition
-          MAX_ATTEMPTS=5
-          ATTEMPT=1
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "Intento $ATTEMPT de $MAX_ATTEMPTS..."
-
-            # Trae cambios remotos manteniendo nuestro commit encima
-            git pull --rebase origin main || {
-              echo "Pull --rebase fallo en intento $ATTEMPT"
-              git rebase --abort 2>/dev/null || true
-              sleep $((ATTEMPT * 5))
-              ATTEMPT=$((ATTEMPT + 1))
-              continue
-            }
-
-            # Intenta el push
-            if git push origin main; then
-              echo "Push exitoso en intento $ATTEMPT"
-              exit 0
-            else
-              echo "Push fallo en intento $ATTEMPT - reintentando..."
-              sleep $((ATTEMPT * 5))
-              ATTEMPT=$((ATTEMPT + 1))
+          git commit -m "Update precios envasado $(date -u +'%Y-%m-%d %H:%M UTC')"
+          n=0
+          until git push; do
+            n=$((n+1))
+            if [ "$n" -ge 5 ]; then
+              echo "Push fallo tras 5 intentos"
+              exit 1
             fi
+            echo "Push rechazado, integrando remoto e intentando de nuevo ($n)..."
+            git pull --rebase origin main
+            sleep 3
           done
 
-          echo "Push fallo despues de $MAX_ATTEMPTS intentos"
-          exit 1
-
       - name: Upload debug files
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot
+          name: debug-files
           path: |
             error_debug.png
             page_debug.html
